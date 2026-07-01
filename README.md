@@ -1,15 +1,22 @@
-# Scope Lens — Netlify deployment
+# Scope Lens — Netlify deployment (v2 — background job version)
 
 This package is ready to deploy as-is. It includes:
 - `index.html` — the tool
-- `netlify/functions/estimate.js` — a small server-side proxy that holds your Anthropic API key
-- `netlify.toml` — tells Netlify where the function lives
+- `netlify/functions/estimate-background.js` — calls Claude's API in the background, no 10-second limit
+- `netlify/functions/estimate-status.js` — small function the browser checks in with every 2.5s to ask "is it ready yet?"
+- `netlify.toml` — tells Netlify where the functions live
+- `package.json` / `package-lock.json` — declares the `@netlify/blobs` library the functions need (Netlify installs this automatically during deploy, you don't need to do anything)
 
-Why the proxy exists: Scope Lens calls Claude's API to read the wireframe + PRD. Inside Claude.ai's
-artifact preview, Anthropic injects the API key invisibly for you. Once this leaves Claude.ai and
-runs as a plain static site, there's no key injection — and you can never put a real API key
-directly in browser JavaScript, since anyone could open dev tools and steal it. The Netlify
-function keeps the key on the server side and the browser only ever talks to your own function.
+**What changed from the previous version:** the old setup made one request and waited for Claude to
+finish before Netlify's 10-second function timeout cut it off — which is why big wireframe + PRD
+uploads were failing with "Unexpected token '<'" even though credits still got charged. This version
+kicks off the job, immediately hands control back to the browser, and the browser politely checks
+back every couple seconds until the answer's ready (up to 4 minutes). No more timeout wall.
+
+Why a server-side function exists at all: Scope Lens calls Claude's API to read the wireframe + PRD.
+You can never put a real API key directly in browser JavaScript, since anyone could open dev tools
+and steal it. The Netlify function keeps the key on the server side and the browser only ever talks
+to your own functions.
 
 ## 1. Get an Anthropic API key
 
@@ -55,8 +62,19 @@ unlock API access.
 ## 5. Test it
 
 Open the site URL Netlify gives you (something like `scope-lens-xyz.netlify.app`), upload a
-wireframe + PRD, and run an estimate. If it fails, check **Site configuration → Functions → Logs**
-in Netlify for the error message — it's almost always a missing or mistyped environment variable.
+wireframe + PRD, and run an estimate. It'll now show "still working" messages while it polls in
+the background — that's expected, even for 30–60+ seconds on bigger uploads.
+
+To confirm the functions actually deployed, visit these two URLs directly (replace with your site name):
+- `https://your-site.netlify.app/.netlify/functions/estimate-background` → should say "Method Not Allowed" (that's correct — it only accepts POST)
+- `https://your-site.netlify.app/.netlify/functions/estimate-status` → should say "Missing jobId" (also correct)
+
+If either shows Netlify's 404 "Page not found" instead, the functions didn't deploy — double check
+**Site configuration → Build & deploy → Build settings** has "Functions directory" set to
+`netlify/functions`, and check the deploy log for a "Packaging Functions" step.
+
+If it fails after that, check **Logs → Functions** in Netlify's left sidebar for the actual error —
+it's almost always a missing or mistyped `ANTHROPIC_API_KEY` environment variable.
 
 ## 6. (Optional) Custom domain
 
